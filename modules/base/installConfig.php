@@ -43,11 +43,21 @@ class owa_installConfigController extends owa_installController {
     public function validate()
     {
         //required params
-        $this->addValidation('db_host', $this->getParam('db_host'), 'required', ['errorMsg' => 'Database host is required.']);
-        $this->addValidation('db_name', $this->getParam('db_name'), 'required', ['errorMsg' => 'Database name is required.']);
-        $this->addValidation('db_user', $this->getParam('db_user'), 'required', ['errorMsg' => 'Database user is required.']);
-        $this->addValidation('db_password', $this->getParam('db_password'), 'required', ['errorMsg' => 'Database password is required.']);
-        $this->addValidation('db_type', $this->getParam('db_type'), 'required', ['errorMsg' => 'Database type is required.']);
+        $db_type = $this->getParam('db_type');
+        $this->addValidation('db_type', $db_type, 'required', ['errorMsg' => 'Database type is required.']);
+        
+        // Different validation based on database type
+        if ($db_type === 'dynamodb') {
+            // DynamoDB specific validation
+            $this->addValidation('aws_region', $this->getParam('aws_region'), 'required', ['errorMsg' => 'AWS Region is required for DynamoDB.']);
+            // AWS credentials are optional if using IAM roles or environment variables
+        } else {
+            // Traditional SQL database validation
+            $this->addValidation('db_host', $this->getParam('db_host'), 'required', ['errorMsg' => 'Database host is required.']);
+            $this->addValidation('db_name', $this->getParam('db_name'), 'required', ['errorMsg' => 'Database name is required.']);
+            $this->addValidation('db_user', $this->getParam('db_user'), 'required', ['errorMsg' => 'Database user is required.']);
+            $this->addValidation('db_password', $this->getParam('db_password'), 'required', ['errorMsg' => 'Database password is required.']);
+        }
 
         // Config for the public_url validation
         $publicUrlConf = [
@@ -79,32 +89,68 @@ class owa_installConfigController extends owa_installController {
             define( 'OWA_DB_TYPE', $this->getParam( 'db_type' ) );
         }
 
-        if ( ! defined( 'OWA_DB_HOST' ) ) {
-            define('OWA_DB_HOST', $this->getParam( 'db_host' ) );
-        }
+        $db_type = $this->getParam('db_type');
+        
+        if ($db_type === 'dynamodb') {
+            // Handle DynamoDB configuration
+            if ( ! defined( 'OWA_DB_REGION' ) ) {
+                define('OWA_DB_REGION', $this->getParam('aws_region'));
+            }
+            if ( ! defined( 'OWA_AWS_ACCESS_KEY_ID' ) && $this->getParam('aws_access_key_id') ) {
+                define('OWA_AWS_ACCESS_KEY_ID', $this->getParam('aws_access_key_id'));
+            }
+            if ( ! defined( 'OWA_AWS_SECRET_ACCESS_KEY' ) && $this->getParam('aws_secret_access_key') ) {
+                define('OWA_AWS_SECRET_ACCESS_KEY', $this->getParam('aws_secret_access_key'));
+            }
+            if ( ! defined( 'OWA_DYNAMODB_ENDPOINT' ) && $this->getParam('dynamodb_endpoint') ) {
+                define('OWA_DYNAMODB_ENDPOINT', $this->getParam('dynamodb_endpoint'));
+            }
+            if ( ! defined( 'OWA_DB_TABLE_PREFIX' ) ) {
+                define('OWA_DB_TABLE_PREFIX', $this->getParam('table_prefix') ?: 'owa_');
+            }
+            
+            owa_coreAPI::setSetting('base', 'db_type', OWA_DB_TYPE);
+            owa_coreAPI::setSetting('base', 'db_region', OWA_DB_REGION);
+            if (defined('OWA_AWS_ACCESS_KEY_ID')) {
+                owa_coreAPI::setSetting('base', 'aws_access_key_id', OWA_AWS_ACCESS_KEY_ID);
+            }
+            if (defined('OWA_AWS_SECRET_ACCESS_KEY')) {
+                owa_coreAPI::setSetting('base', 'aws_secret_access_key', OWA_AWS_SECRET_ACCESS_KEY);
+            }
+            if (defined('OWA_DYNAMODB_ENDPOINT')) {
+                owa_coreAPI::setSetting('base', 'dynamodb_endpoint', OWA_DYNAMODB_ENDPOINT);
+            }
+            owa_coreAPI::setSetting('base', 'db_table_prefix', OWA_DB_TABLE_PREFIX);
+            
+        } else {
+            // Handle traditional SQL database configuration
+            if ( ! defined( 'OWA_DB_HOST' ) ) {
+                define('OWA_DB_HOST', $this->getParam( 'db_host' ) );
+            }
 
-        if ( ! defined( 'OWA_DB_PORT' ) ) {
-            define('OWA_DB_PORT', $this->getParam( 'db_port' ) );
-        }
+            if ( ! defined( 'OWA_DB_PORT' ) ) {
+                define('OWA_DB_PORT', $this->getParam( 'db_port' ) );
+            }
 
-        if ( ! defined( 'OWA_DB_NAME' ) ) {
-            define('OWA_DB_NAME', $this->getParam( 'db_name' ) );
-        }
+            if ( ! defined( 'OWA_DB_NAME' ) ) {
+                define('OWA_DB_NAME', $this->getParam( 'db_name' ) );
+            }
 
-        if ( ! defined( 'OWA_DB_USER' ) ) {
-            define('OWA_DB_USER', $this->getParam( 'db_user' ) );
-        }
+            if ( ! defined( 'OWA_DB_USER' ) ) {
+                define('OWA_DB_USER', $this->getParam( 'db_user' ) );
+            }
 
-        if ( ! defined( 'OWA_DB_PASSWORD' ) ) {
-            define('OWA_DB_PASSWORD', $this->getParam( 'db_password' ) );
+            if ( ! defined( 'OWA_DB_PASSWORD' ) ) {
+                define('OWA_DB_PASSWORD', $this->getParam( 'db_password' ) );
+            }
+            
+            owa_coreAPI::setSetting('base', 'db_type', OWA_DB_TYPE);
+            owa_coreAPI::setSetting('base', 'db_host', OWA_DB_HOST);
+            owa_coreAPI::setSetting('base', 'db_port', OWA_DB_PORT);
+            owa_coreAPI::setSetting('base', 'db_name', OWA_DB_NAME);
+            owa_coreAPI::setSetting('base', 'db_user', OWA_DB_USER);
+            owa_coreAPI::setSetting('base', 'db_password', OWA_DB_PASSWORD);
         }
-
-        owa_coreAPI::setSetting('base', 'db_type', OWA_DB_TYPE);
-        owa_coreAPI::setSetting('base', 'db_host', OWA_DB_HOST);
-        owa_coreAPI::setSetting('base', 'db_port', OWA_DB_PORT);
-        owa_coreAPI::setSetting('base', 'db_name', OWA_DB_NAME);
-        owa_coreAPI::setSetting('base', 'db_user', OWA_DB_USER);
-        owa_coreAPI::setSetting('base', 'db_password', OWA_DB_PASSWORD);
 
         // Check DB connection status
         $db = owa_coreAPI::dbSingleton();
