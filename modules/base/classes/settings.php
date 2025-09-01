@@ -192,6 +192,10 @@
             $this->set('base', 'db_password', OWA_DB_PASSWORD);
         }
 
+        if (defined('OWA_DYNAMODB_REGION')) {
+            $this->set('base', 'dynamodb_region', OWA_DYNAMODB_REGION);
+        }
+
         /* SET ERROR HANDLER */
         if (defined('OWA_ERROR_HANDLER')) {
             $this->set('base', 'error_handler', OWA_ERROR_HANDLER);
