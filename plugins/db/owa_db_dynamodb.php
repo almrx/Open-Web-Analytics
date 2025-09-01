@@ -61,8 +61,13 @@ class owa_db_dynamodb extends owa_db {
                     }
                 }
                 
-                if (!$autoload_found || !class_exists('Aws\DynamoDb\DynamoDbClient')) {
-                    $this->e->error('AWS SDK for PHP is required for DynamoDB support. Please install via composer: composer require aws/aws-sdk-php');
+                if (!$autoload_found) {
+                    $this->e->error('AWS SDK for PHP autoload not found. Please install via: composer require aws/aws-sdk-php');
+                    return false;
+                }
+                
+                if (!class_exists('Aws\DynamoDb\DynamoDbClient')) {
+                    $this->e->error('AWS SDK for PHP is required for DynamoDB support. Please install via: composer require aws/aws-sdk-php');
                     return false;
                 }
             }
@@ -85,12 +90,16 @@ class owa_db_dynamodb extends owa_db {
                     'key' => $key,
                     'secret' => $secret
                 ];
+            } else {
+                // Try to use environment variables or IAM roles
+                $this->e->debug('Using default AWS credential chain (environment variables, IAM roles, etc.)');
             }
 
             // Add endpoint for local DynamoDB
             $endpoint = $this->getConnectionParam('endpoint');
             if ($endpoint) {
                 $config['endpoint'] = $endpoint;
+                $this->e->debug("Using custom DynamoDB endpoint: $endpoint");
             }
 
             try {
@@ -98,9 +107,18 @@ class owa_db_dynamodb extends owa_db {
                 $this->connection = true;
                 $this->connection_status = true;
                 
-                // Test connection
-                $this->dynamodb_client->listTables(['Limit' => 1]);
+                // Test connection with a simple operation
+                $result = $this->dynamodb_client->listTables(['Limit' => 1]);
+                $this->e->debug("DynamoDB connection successful. Service available.");
                 
+            } catch (\Aws\Exception\CredentialsException $e) {
+                $this->e->error('DynamoDB credentials error: ' . $e->getMessage() . '. Please check AWS credentials configuration.');
+                $this->connection_status = false;
+                return false;
+            } catch (\Aws\DynamoDb\Exception\DynamoDbException $e) {
+                $this->e->error('DynamoDB service error: ' . $e->getMessage());
+                $this->connection_status = false;
+                return false;
             } catch (Exception $e) {
                 $this->e->error('DynamoDB connection failed: ' . $e->getMessage());
                 $this->connection_status = false;
@@ -469,5 +487,65 @@ class owa_db_dynamodb extends owa_db {
             return $this->result[0];
         }
         return false;
+    }
+
+    /**
+     * Get affected rows count
+     */
+    function getAffectedRows() {
+        return $this->rows_affected;
+    }
+
+    /**
+     * Execute raw query (limited DynamoDB support)
+     */
+    function query($operation) {
+        // For DynamoDB, this would be for direct AWS SDK calls
+        // Limited implementation for compatibility
+        $this->e->debug("Direct query execution not supported in DynamoDB: $operation");
+        return false;
+    }
+
+    /**
+     * Get number of rows in result
+     */
+    function getNumRows() {
+        return $this->num_rows;
+    }
+
+    /**
+     * DynamoDB doesn't support traditional LIMIT/OFFSET pagination
+     * This provides basic limit support using DynamoDB Limit parameter
+     */
+    function limit($limit) {
+        $this->_sqlParams['limit'][] = array('limit' => $limit);
+        return $this;
+    }
+
+    /**
+     * Order by is not directly supported in DynamoDB scans
+     * This is a no-op for compatibility but logs a warning
+     */
+    function orderBy($col, $direction = 'ASC') {
+        $this->e->debug("ORDER BY not supported in DynamoDB scans. Results are not guaranteed to be ordered by $col $direction");
+        return $this;
+    }
+
+    /**
+     * Group by is not supported in DynamoDB
+     * This is a no-op for compatibility but logs a warning  
+     */
+    function groupBy($col) {
+        $this->e->debug("GROUP BY not supported in DynamoDB. Grouping by $col will be ignored.");
+        return $this;
+    }
+
+    /**
+     * Having clauses are not supported in DynamoDB
+     * This is a no-op for compatibility but logs a warning
+     */
+    function having($name, $value, $operator = '=') {
+        $this->e->debug("HAVING clauses not supported in DynamoDB. Having $name $operator $value will be ignored.");
+        return $this;
     }
 }
