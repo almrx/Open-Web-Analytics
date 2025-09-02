@@ -16,22 +16,90 @@
 // $Id$
 //
 
+
+// DynamoDB-specific constants
+define('OWA_DTD_BIGINT', 'N');
+define('OWA_DTD_INT', 'N');
+define('OWA_DTD_TINYINT', 'N');
+define('OWA_DTD_TINYINT2', 'N');
+define('OWA_DTD_TINYINT4', 'N');
+define('OWA_DTD_SERIAL', 'N');
+define('OWA_DTD_PRIMARY_KEY', 'HASH');
+define('OWA_DTD_VARCHAR10', 'S');
+define('OWA_DTD_VARCHAR255', 'S');
+define('OWA_DTD_VARCHAR', 'S');
+define('OWA_DTD_TEXT', 'S');
+define('OWA_DTD_BOOLEAN', 'BOOL');
+define('OWA_DTD_TIMESTAMP', 'N');
+define('OWA_DTD_BLOB', 'B');
+define('OWA_DTD_INDEX', 'GSI');
+define('OWA_DTD_AUTO_INCREMENT', '');
+define('OWA_DTD_NOT_NULL', '');
+define('OWA_DTD_UNIQUE', 'HASH');
+
+// DynamoDB operation mappings (many SQL operations don't apply to DynamoDB)
+define('OWA_SQL_ADD_COLUMN', ''); // Not applicable in DynamoDB
+define('OWA_SQL_DROP_COLUMN', ''); // Not applicable in DynamoDB
+define('OWA_SQL_RENAME_COLUMN', ''); // Not applicable in DynamoDB
+define('OWA_SQL_MODIFY_COLUMN', ''); // Not applicable in DynamoDB
+define('OWA_SQL_RENAME_TABLE', ''); // Limited in DynamoDB
+define('OWA_SQL_CREATE_TABLE', 'CreateTable');
+define('OWA_SQL_DROP_TABLE', 'DeleteTable');
+define('OWA_SQL_SHOW_TABLE', 'DescribeTable');
+define('OWA_SQL_INSERT_ROW', 'PutItem');
+define('OWA_SQL_UPDATE_ROW', 'UpdateItem');
+define('OWA_SQL_DELETE_ROW', 'DeleteItem');
+define('OWA_SQL_CREATE_INDEX', 'UpdateTable');
+define('OWA_SQL_DROP_INDEX', 'UpdateTable');
+define('OWA_SQL_INDEX', 'GSI');
+define('OWA_SQL_BEGIN_TRANSACTION', 'TransactWrite');
+define('OWA_SQL_END_TRANSACTION', 'TransactWrite');
+
+// Table configuration
+define('OWA_DTD_TABLE_TYPE', '');
+define('OWA_DTD_TABLE_TYPE_DEFAULT', 'PROVISIONED');
+define('OWA_DTD_TABLE_TYPE_DISK', 'PROVISIONED');
+define('OWA_DTD_TABLE_TYPE_MEMORY', 'ON_DEMAND');
+define('OWA_SQL_ALTER_TABLE_TYPE', 'UpdateTable');
+
+// Join operations (not supported in DynamoDB - will need workarounds)
+define('OWA_SQL_JOIN_LEFT_OUTER', '');
+define('OWA_SQL_JOIN_LEFT_INNER', '');
+define('OWA_SQL_JOIN_RIGHT_OUTER', '');
+define('OWA_SQL_JOIN_RIGHT_INNER', '');
+define('OWA_SQL_JOIN', '');
+
+// Sorting and filtering
+define('OWA_SQL_DESCENDING', 'DESC');
+define('OWA_SQL_ASCENDING', 'ASC');
+define('OWA_SQL_REGEXP', 'contains');
+define('OWA_SQL_NOTREGEXP', 'not_contains');
+define('OWA_SQL_LIKE', 'contains');
+define('OWA_SQL_ADD_INDEX', 'UpdateTable');
+
+// Aggregation functions (limited in DynamoDB)
+define('OWA_SQL_COUNT', 'COUNT');
+define('OWA_SQL_SUM', 'SUM');
+define('OWA_SQL_ROUND', 'ROUND');
+define('OWA_SQL_AVERAGE', 'AVG');
+define('OWA_SQL_DISTINCT', 'DISTINCT');
+define('OWA_SQL_DIVISION', 'DIVISION');
+
+// Character encoding (not applicable to DynamoDB)
+define('OWA_DTD_CHARACTER_ENCODING_UTF8', 'utf8');
+define('OWA_DTD_TABLE_CHARACTER_ENCODING', '');
+
 // DynamoDB-specific constants - NoSQL approach
 define('OWA_DYNAMODB_TABLE_PREFIX', 'owa_');
 define('OWA_DYNAMODB_GSI_SUFFIX', '_gsi');
 define('OWA_DYNAMODB_DEFAULT_THROUGHPUT', 5);
 
+
 /**
  * DynamoDB Data Access Class
  * 
  * @author      OWA Team
- * @copyright   Copyright &copy; 2006 Peter Adams <peter@openwebanalytics.com>
- * @license     http://www.gnu.org/copyleft/gpl.html GPL v2.0
- * @category    owa
- * @package     owa
- * @version     $Revision$
- * @since       owa 1.0.0
- */
+**/
 class owa_db_dynamodb extends owa_db {
 
     var $dynamodb_client;
@@ -549,3 +617,4 @@ class owa_db_dynamodb extends owa_db {
         return $this;
     }
 }
+?>

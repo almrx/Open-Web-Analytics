@@ -43,6 +43,19 @@ define('OWA_DB_PORT', '3306'); // port of database
 define('OWA_DB_PASSWORD', 'yourdbpasswordgoeshere'); // database user's password
 
 /**
+ * DYNAMODB CONFIGURATION
+ *
+ * Additional configuration for DynamoDB when OWA_DB_TYPE is set to 'dynamodb'
+ * For DynamoDB:
+ * - OWA_DB_USER should be your AWS Access Key ID
+ * - OWA_DB_PASSWORD should be your AWS Secret Access Key  
+ * - OWA_DB_NAME should be your table prefix (e.g., 'owa_')
+ * - OWA_DB_HOST is not used for DynamoDB
+ * - OWA_DB_PORT is not used for DynamoDB
+ */
+define('OWA_DYNAMODB_REGION', 'us-east-1'); // AWS region for DynamoDB
+
+/**
  * AUTHENTICATION KEYS AND SALTS
  *
  * Change these to different unique phrases.
