@@ -112,15 +112,36 @@ class owa_coreAPI {
              return;
         } else {
             $connection_class = 'owa_db_'.$db_type;
-            $db = new $connection_class(
-                owa_coreAPI::getSetting('base','db_host'),
-                owa_coreAPI::getSetting('base','db_port'),
-                owa_coreAPI::getSetting('base','db_name'),
-                owa_coreAPI::getSetting('base','db_user'),
-                owa_coreAPI::getSetting('base','db_password'),
-                owa_coreAPI::getSetting('base','db_force_new_connections'),
-                owa_coreAPI::getSetting('base','db_make_persistant_connections')
-            );
+            
+            if ($db_type === 'dynamodb') {
+                // DynamoDB configuration
+                $db = new $connection_class(
+                    owa_coreAPI::getSetting('base','db_region'),
+                    null, // port not applicable
+                    owa_coreAPI::getSetting('base','db_table_prefix'),
+                    owa_coreAPI::getSetting('base','aws_access_key_id'),
+                    owa_coreAPI::getSetting('base','aws_secret_access_key'),
+                    owa_coreAPI::getSetting('base','db_force_new_connections'),
+                    owa_coreAPI::getSetting('base','db_make_persistant_connections')
+                );
+                // Set additional DynamoDB parameters
+                $db->setConnectionParam('region', owa_coreAPI::getSetting('base','db_region'));
+                $db->setConnectionParam('aws_access_key_id', owa_coreAPI::getSetting('base','aws_access_key_id'));
+                $db->setConnectionParam('aws_secret_access_key', owa_coreAPI::getSetting('base','aws_secret_access_key'));
+                $db->setConnectionParam('endpoint', owa_coreAPI::getSetting('base','dynamodb_endpoint'));
+                $db->setConnectionParam('table_prefix', owa_coreAPI::getSetting('base','db_table_prefix'));
+            } else {
+                // Traditional SQL database configuration
+                $db = new $connection_class(
+                    owa_coreAPI::getSetting('base','db_host'),
+                    owa_coreAPI::getSetting('base','db_port'),
+                    owa_coreAPI::getSetting('base','db_name'),
+                    owa_coreAPI::getSetting('base','db_user'),
+                    owa_coreAPI::getSetting('base','db_password'),
+                    owa_coreAPI::getSetting('base','db_force_new_connections'),
+                    owa_coreAPI::getSetting('base','db_make_persistant_connections')
+                );
+            }
 
             return $db;
         }

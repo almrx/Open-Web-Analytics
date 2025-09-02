@@ -35,7 +35,7 @@
  *
  */
 
-define('OWA_DB_TYPE', 'yourdbtypegoeshere'); // options: mysql
+define('OWA_DB_TYPE', 'yourdbtypegoeshere'); // options: mysql, dynamodb
 define('OWA_DB_NAME', 'yourdbnamegoeshere'); // name of the database
 define('OWA_DB_HOST', 'yourdbhostgoeshere'); // host name of the server housing the database
 define('OWA_DB_USER', 'yourdbusergoeshere'); // database user
