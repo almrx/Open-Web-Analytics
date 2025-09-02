@@ -180,6 +180,10 @@ class owa_db extends owa_base {
         }
     }
 
+    function setConnectionParam($name, $value) {
+        $this->connectionParams[$name] = $value;
+    }
+
     /**
      * Prepare string
      *

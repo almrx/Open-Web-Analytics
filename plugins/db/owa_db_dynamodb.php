@@ -16,6 +16,7 @@
 // $Id$
 //
 
+
 // DynamoDB-specific constants
 define('OWA_DTD_BIGINT', 'N');
 define('OWA_DTD_INT', 'N');
@@ -88,80 +89,106 @@ define('OWA_SQL_DIVISION', 'DIVISION');
 define('OWA_DTD_CHARACTER_ENCODING_UTF8', 'utf8');
 define('OWA_DTD_TABLE_CHARACTER_ENCODING', '');
 
+// DynamoDB-specific constants - NoSQL approach
+define('OWA_DYNAMODB_TABLE_PREFIX', 'owa_');
+define('OWA_DYNAMODB_GSI_SUFFIX', '_gsi');
+define('OWA_DYNAMODB_DEFAULT_THROUGHPUT', 5);
+
+
 /**
  * DynamoDB Data Access Class
  * 
  * @author      OWA Team
- * @license     http://www.gnu.org/copyleft/gpl.html GPL v2.0
- * @category    owa
- * @package     owa
- * @since        owa 1.7.0
- */
+**/
 class owa_db_dynamodb extends owa_db {
 
-    /**
-     * DynamoDB Client
-     * @var Aws\DynamoDb\DynamoDbClient
-     */
-    private $dynamoDbClient;
-
-    /**
-     * AWS Region
-     * @var string
-     */
-    private $region;
-
-    /**
-     * Table prefix for multi-tenancy
-     * @var string
-     */
-    private $tablePrefix;
+    var $dynamodb_client;
+    var $region;
+    var $table_prefix;
 
     function connect() {
 
-        if (!$this->connection) {
+        if ( ! $this->connection ) {
 
-            try {
-                // Load AWS SDK
-                if (!class_exists('Aws\DynamoDb\DynamoDbClient')) {
-                    // Try to autoload via composer
-                    if (file_exists(OWA_BASE_DIR . '/vendor/autoload.php')) {
-                        require_once(OWA_BASE_DIR . '/vendor/autoload.php');
-                    } else {
-                        $this->e->alert('AWS SDK for PHP not found. Please install via composer: composer require aws/aws-sdk-php');
-                        $this->connection_status = false;
-                        return false;
+            // Check for AWS SDK
+            if ( ! class_exists('Aws\DynamoDb\DynamoDbClient') ) {
+                
+                // Try to load composer autoload
+                $autoload_paths = [
+                    OWA_BASE_DIR . '/vendor/autoload.php',
+                    OWA_BASE_DIR . '/../../vendor/autoload.php', // if installed via composer
+                    dirname(__FILE__) . '/../../vendor/autoload.php'
+                ];
+                
+                $autoload_found = false;
+                foreach ($autoload_paths as $path) {
+                    if (file_exists($path)) {
+                        require_once $path;
+                        $autoload_found = true;
+                        break;
                     }
                 }
-
-                // Get AWS credentials and region from connection params
-                $this->region = owa_coreAPI::getSetting('base', 'dynamodb_region') ?: $this->getConnectionParam('region') ?: 'us-east-1';
-                $this->tablePrefix = $this->getConnectionParam('name') ?: 'owa_';
-
-                $config = [
-                    'region' => $this->region,
-                    'version' => 'latest'
-                ];
-
-                // Add credentials if provided
-                $accessKey = $this->getConnectionParam('user');
-                $secretKey = $this->getConnectionParam('password');
                 
-                if ($accessKey && $secretKey) {
-                    $config['credentials'] = [
-                        'key' => $accessKey,
-                        'secret' => $secretKey
-                    ];
+                if (!$autoload_found) {
+                    $this->e->error('AWS SDK for PHP autoload not found. Please install via: composer require aws/aws-sdk-php');
+                    return false;
                 }
+                
+                if (!class_exists('Aws\DynamoDb\DynamoDbClient')) {
+                    $this->e->error('AWS SDK for PHP is required for DynamoDB support. Please install via: composer require aws/aws-sdk-php');
+                    return false;
+                }
+            }
 
-                $this->dynamoDbClient = new \Aws\DynamoDb\DynamoDbClient($config);
-                $this->connection = $this->dynamoDbClient;
+            // Get connection parameters for DynamoDB
+            $this->region = $this->getConnectionParam('region') ?: 'us-east-1';
+            $this->table_prefix = $this->getConnectionParam('table_prefix') ?: OWA_DYNAMODB_TABLE_PREFIX;
 
+            $config = [
+                'region' => $this->region,
+                'version' => 'latest'
+            ];
+
+            // Add credentials if provided
+            $key = $this->getConnectionParam('aws_access_key_id');
+            $secret = $this->getConnectionParam('aws_secret_access_key');
+            
+            if ($key && $secret) {
+                $config['credentials'] = [
+                    'key' => $key,
+                    'secret' => $secret
+                ];
+            } else {
+                // Try to use environment variables or IAM roles
+                $this->e->debug('Using default AWS credential chain (environment variables, IAM roles, etc.)');
+            }
+
+            // Add endpoint for local DynamoDB
+            $endpoint = $this->getConnectionParam('endpoint');
+            if ($endpoint) {
+                $config['endpoint'] = $endpoint;
+                $this->e->debug("Using custom DynamoDB endpoint: $endpoint");
+            }
+
+            try {
+                $this->dynamodb_client = new \Aws\DynamoDb\DynamoDbClient($config);
+                $this->connection = true;
                 $this->connection_status = true;
-                return true;
-
+                
+                // Test connection with a simple operation
+                $result = $this->dynamodb_client->listTables(['Limit' => 1]);
+                $this->e->debug("DynamoDB connection successful. Service available.");
+                
+            } catch (\Aws\Exception\CredentialsException $e) {
+                $this->e->error('DynamoDB credentials error: ' . $e->getMessage() . '. Please check AWS credentials configuration.');
+                $this->connection_status = false;
+                return false;
+            } catch (\Aws\DynamoDb\Exception\DynamoDbException $e) {
+                $this->e->error('DynamoDB service error: ' . $e->getMessage());
+                $this->connection_status = false;
+                return false;
             } catch (Exception $e) {
-                $this->e->alert('Could not connect to DynamoDB: ' . $e->getMessage());
+                $this->e->error('DynamoDB connection failed: ' . $e->getMessage());
                 $this->connection_status = false;
                 return false;
             }
@@ -170,532 +197,298 @@ class owa_db_dynamodb extends owa_db {
         return true;
     }
 
-    /**
-     * Override query method to handle complex patterns and improve logging
-     */
-    function query($sql) {
-
-        if ($this->connection_status == false) {
-            $this->connect();
-        }
-
-        if ($this->connection_status == false) {
-            $this->e->debug('DynamoDB connection not established, skipping query: ' . $sql);
-            return false;
-        }
-
-        $this->e->debug(sprintf('DynamoDB Query: %s', $sql));
-
-        // Handle special cases that don't apply to DynamoDB
-        if (preg_match('/^(SHOW|DESCRIBE|EXPLAIN|SET SESSION|ANALYZE)/i', $sql)) {
-            $this->e->debug('DynamoDB: Ignoring non-applicable SQL command: ' . $sql);
-            return true; // Return success for commands that don't apply to DynamoDB
-        }
-
-        try {
-            // Parse the SQL-like query and translate to DynamoDB operation
-            return $this->_translateAndExecute($sql);
-
-        } catch (Exception $e) {
-            $this->e->debug(
-                sprintf(
-                    'A DynamoDB error occurred. Error: %s. Query: %s',
-                    $e->getMessage(),
-                    $sql
-                )
-            );
-            return false;
-        }
-    }
-
-    /**
-     * Translate SQL operations to DynamoDB operations
-     * This is a simplified translation layer
-     */
-    private function _translateAndExecute($sql) {
-
-        // Simple pattern matching for SQL operations
-        $sql = trim($sql);
-
-        if (preg_match('/^CREATE TABLE/i', $sql)) {
-            return $this->_executeCreateTable($sql);
-        } elseif (preg_match('/^DROP TABLE/i', $sql)) {
-            return $this->_executeDropTable($sql);
-        } elseif (preg_match('/^INSERT INTO/i', $sql)) {
-            return $this->_executeInsert($sql);
-        } elseif (preg_match('/^UPDATE/i', $sql)) {
-            return $this->_executeUpdate($sql);
-        } elseif (preg_match('/^DELETE FROM/i', $sql)) {
-            return $this->_executeDelete($sql);
-        } elseif (preg_match('/^SELECT/i', $sql)) {
-            return $this->_executeSelect($sql);
-        } else {
-            // For other operations, just return true (some operations don't apply to DynamoDB)
-            return true;
-        }
-    }
-
-    private function _executeCreateTable($sql) {
-        // Extract table name from CREATE TABLE statement
-        if (preg_match('/CREATE TABLE IF NOT EXISTS (\w+)/i', $sql, $matches)) {
-            $tableName = $this->tablePrefix . $matches[1];
-
-            try {
-                // Check if table already exists
-                $this->dynamoDbClient->describeTable(['TableName' => $tableName]);
-                return true; // Table already exists
-            } catch (\Aws\DynamoDb\Exception\ResourceNotFoundException $e) {
-                // Table doesn't exist, create it
-                $params = [
-                    'TableName' => $tableName,
-                    'KeySchema' => [
-                        [
-                            'AttributeName' => 'id',
-                            'KeyType' => 'HASH'
-                        ]
-                    ],
-                    'AttributeDefinitions' => [
-                        [
-                            'AttributeName' => 'id',
-                            'AttributeType' => 'S'
-                        ]
-                    ],
-                    'BillingMode' => 'PAY_PER_REQUEST'
-                ];
-
-                $result = $this->dynamoDbClient->createTable($params);
-                
-                // Wait for table to be created
-                $this->dynamoDbClient->waitUntil('TableExists', ['TableName' => $tableName]);
-                
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private function _executeDropTable($sql) {
-        if (preg_match('/DROP TABLE IF EXISTS (\w+)/i', $sql, $matches)) {
-            $tableName = $this->tablePrefix . $matches[1];
-
-            try {
-                $this->dynamoDbClient->deleteTable(['TableName' => $tableName]);
-                return true;
-            } catch (\Aws\DynamoDb\Exception\ResourceNotFoundException $e) {
-                return true; // Table doesn't exist, consider it successful
-            }
-        }
-        return false;
-    }
-
-    private function _executeInsert($sql) {
-        // Parse INSERT INTO table (columns) VALUES (values) format
-        if (preg_match('/INSERT INTO (\w+) \(([^)]+)\) VALUES \(([^)]+)\)/i', $sql, $matches)) {
-            $tableName = $this->tablePrefix . $matches[1];
-            $columns = array_map('trim', explode(',', $matches[2]));
-            $values = array_map('trim', explode(',', $matches[3]));
-
-            // Remove quotes from values
-            $values = array_map(function($v) { return trim($v, "'\""); }, $values);
-
-            $item = array();
-            for ($i = 0; $i < count($columns); $i++) {
-                if (isset($values[$i])) {
-                    // Determine attribute type based on value
-                    if (is_numeric($values[$i])) {
-                        $item[$columns[$i]] = ['N' => (string)$values[$i]];
-                    } elseif ($values[$i] === 'true' || $values[$i] === 'false') {
-                        $item[$columns[$i]] = ['BOOL' => $values[$i] === 'true'];
-                    } else {
-                        $item[$columns[$i]] = ['S' => $values[$i]];
-                    }
-                }
-            }
-
-            try {
-                $this->dynamoDbClient->putItem([
-                    'TableName' => $tableName,
-                    'Item' => $item
-                ]);
-                return true;
-            } catch (Exception $e) {
-                $this->e->debug('DynamoDB Insert Error: ' . $e->getMessage());
-                return false;
-            }
-        }
-        return false;
-    }
-
-    private function _executeUpdate($sql) {
-        // Parse UPDATE table SET column = value WHERE condition
-        if (preg_match('/UPDATE (\w+) SET (.+) WHERE (.+)/i', $sql, $matches)) {
-            $tableName = $this->tablePrefix . $matches[1];
-            $setClause = $matches[2];
-            $whereClause = $matches[3];
-
-            // Parse WHERE clause for key
-            if (preg_match('/(\w+)\s*=\s*[\'"]([^\'"]+)[\'"]/', $whereClause, $whereMatches)) {
-                $keyName = $whereMatches[1];
-                $keyValue = $whereMatches[2];
-
-                // Parse SET clause
-                $updateExpression = 'SET ';
-                $expressionAttributeValues = array();
-                $expressionAttributeNames = array();
-
-                $setParts = explode(',', $setClause);
-                $setItems = array();
-
-                foreach ($setParts as $i => $setPart) {
-                    if (preg_match('/(\w+)\s*=\s*[\'"]([^\'"]+)[\'"]/', trim($setPart), $setMatches)) {
-                        $attrName = $setMatches[1];
-                        $attrValue = $setMatches[2];
-                        
-                        $placeholder = ':val' . $i;
-                        $namePlaceholder = '#attr' . $i;
-                        
-                        $setItems[] = "$namePlaceholder = $placeholder";
-                        $expressionAttributeNames[$namePlaceholder] = $attrName;
-                        
-                        // Determine value type
-                        if (is_numeric($attrValue)) {
-                            $expressionAttributeValues[$placeholder] = ['N' => (string)$attrValue];
-                        } else {
-                            $expressionAttributeValues[$placeholder] = ['S' => $attrValue];
-                        }
-                    }
-                }
-
-                $updateExpression .= implode(', ', $setItems);
-
-                try {
-                    $this->dynamoDbClient->updateItem([
-                        'TableName' => $tableName,
-                        'Key' => [
-                            $keyName => ['S' => $keyValue]
-                        ],
-                        'UpdateExpression' => $updateExpression,
-                        'ExpressionAttributeNames' => $expressionAttributeNames,
-                        'ExpressionAttributeValues' => $expressionAttributeValues
-                    ]);
-                    return true;
-                } catch (Exception $e) {
-                    $this->e->debug('DynamoDB Update Error: ' . $e->getMessage());
-                    return false;
-                }
-            }
-        }
-        return false;
-    }
-
-    private function _executeDelete($sql) {
-        // Parse DELETE FROM table WHERE condition
-        if (preg_match('/DELETE FROM (\w+) WHERE (.+)/i', $sql, $matches)) {
-            $tableName = $this->tablePrefix . $matches[1];
-            $whereClause = $matches[2];
-
-            // Parse WHERE clause for key
-            if (preg_match('/(\w+)\s*=\s*[\'"]([^\'"]+)[\'"]/', $whereClause, $whereMatches)) {
-                $keyName = $whereMatches[1];
-                $keyValue = $whereMatches[2];
-
-                try {
-                    $this->dynamoDbClient->deleteItem([
-                        'TableName' => $tableName,
-                        'Key' => [
-                            $keyName => ['S' => $keyValue]
-                        ]
-                    ]);
-                    return true;
-                } catch (Exception $e) {
-                    $this->e->debug('DynamoDB Delete Error: ' . $e->getMessage());
-                    return false;
-                }
-            }
-        }
-        return false;
-    }
-
-    private function _executeSelect($sql) {
-        // Parse basic SELECT statements
-        if (preg_match('/SELECT \* FROM (\w+)(?:\s+WHERE\s+(.+))?/i', $sql, $matches)) {
-            $tableName = $this->tablePrefix . $matches[1];
-            $whereClause = isset($matches[2]) ? $matches[2] : null;
-
-            try {
-                $params = ['TableName' => $tableName];
-
-                if ($whereClause) {
-                    // Parse simple WHERE conditions (id = 'value')
-                    if (preg_match('/(\w+)\s*=\s*[\'"]([^\'"]+)[\'"]/', $whereClause, $whereMatches)) {
-                        $keyName = $whereMatches[1];
-                        $keyValue = $whereMatches[2];
-
-                        // Use Query operation for key-based lookup
-                        $params['KeyConditionExpression'] = '#k = :v';
-                        $params['ExpressionAttributeNames'] = ['#k' => $keyName];
-                        $params['ExpressionAttributeValues'] = [':v' => ['S' => $keyValue]];
-
-                        $result = $this->dynamoDbClient->query($params);
-                    } else {
-                        // Use Scan operation for other conditions
-                        $result = $this->dynamoDbClient->scan($params);
-                    }
-                } else {
-                    // Scan entire table
-                    $result = $this->dynamoDbClient->scan($params);
-                }
-
-                // Convert DynamoDB response to associative array format
-                $rows = array();
-                foreach ($result['Items'] as $item) {
-                    $row = array();
-                    foreach ($item as $key => $value) {
-                        // Extract the actual value from DynamoDB format
-                        if (isset($value['S'])) {
-                            $row[$key] = $value['S'];
-                        } elseif (isset($value['N'])) {
-                            $row[$key] = $value['N'];
-                        } elseif (isset($value['BOOL'])) {
-                            $row[$key] = $value['BOOL'];
-                        }
-                    }
-                    $rows[] = $row;
-                }
-
-                return $rows;
-
-            } catch (Exception $e) {
-                $this->e->debug('DynamoDB Select Error: ' . $e->getMessage());
-                return array();
-            }
-        }
-        return array();
-    }
-
     function close() {
-        // DynamoDB client doesn't need explicit closing
         $this->connection = null;
+        $this->dynamodb_client = null;
         $this->connection_status = false;
+        return true;
+    }
+
+    function isConnectionEstablished() {
+        return $this->connection_status === true;
     }
 
     /**
-     * Fetch result set array for DynamoDB
+     * Execute query based on query type
+     * Override parent to handle DynamoDB operations
      */
-    function get_results($sql) {
-        if ($sql) {
-            return $this->query($sql);
-        }
-        return array();
-    }
-
-    /**
-     * Fetch single row for DynamoDB
-     */
-    function get_row($sql) {
-        $results = $this->get_results($sql);
-        return !empty($results) ? $results[0] : null;
-    }
-
-    /**
-     * Prepare and escape string for DynamoDB
-     * DynamoDB handles this automatically, so we just return the string
-     */
-    function prepare($string) {
-        if (is_null($string)) {
-            return $string;
-        }
-        return $string;
-    }
-
-    /**
-     * Override _selectQuery to handle DynamoDB-specific select operations
-     */
-    function _selectQuery() {
+    function _query() {
         
-        // Get the parameters built by the parent class methods
-        $selectParams = $this->_fetchSqlParams('select_values');
-        $fromParams = $this->_fetchSqlParams('from');
-        $whereParams = $this->_fetchSqlParams('where');
-        $limitParam = $this->_fetchSqlParams('limit');
-        
-        if (!$fromParams || empty($fromParams)) {
-            return array();
-        }
-        
-        // Get the table name (should be only one for DynamoDB)
-        $fromTable = reset($fromParams); // Get first table
-        $tableName = $this->tablePrefix . $fromTable['name'];
+        $this->_timerStart();
         
         try {
-            $params = ['TableName' => $tableName];
-            
-            // Handle LIMIT
-            if ($limitParam) {
-                $params['Limit'] = (int)$limitParam;
+            switch($this->_sqlParams['query_type']) {
+                case 'insert':
+                    $result = $this->_dynamoInsertQuery();
+                    break;
+                case 'select':
+                    $result = $this->_dynamoSelectQuery();
+                    break;
+                case 'update':
+                    $result = $this->_dynamoUpdateQuery();
+                    break;
+                case 'delete':
+                    $result = $this->_dynamoDeleteQuery();
+                    break;
+                default:
+                    $result = false;
             }
-            
-            // Handle WHERE conditions
-            if ($whereParams && !empty($whereParams)) {
-                $whereCondition = reset($whereParams); // Get first condition
-                
-                // Check if it's a key-based query (more efficient)
-                if ($whereCondition['name'] === 'id' || $this->_isPrimaryKey($fromTable['name'], $whereCondition['name'])) {
-                    // Use Query operation for key-based lookups
-                    $params['KeyConditionExpression'] = '#k = :v';
-                    $params['ExpressionAttributeNames'] = ['#k' => $whereCondition['name']];
-                    $params['ExpressionAttributeValues'] = [':v' => $this->_formatDynamoValue($whereCondition['value'])];
-                    
-                    $result = $this->dynamoDbClient->query($params);
-                } else {
-                    // Use Scan operation with filter for non-key attributes
-                    $params['FilterExpression'] = '#attr = :val';
-                    $params['ExpressionAttributeNames'] = ['#attr' => $whereCondition['name']];
-                    $params['ExpressionAttributeValues'] = [':val' => $this->_formatDynamoValue($whereCondition['value'])];
-                    
-                    $result = $this->dynamoDbClient->scan($params);
-                }
-            } else {
-                // No WHERE clause, scan entire table
-                $result = $this->dynamoDbClient->scan($params);
-            }
-            
-            // Convert DynamoDB response to associative array format expected by OWA
-            $rows = array();
-            foreach ($result['Items'] as $item) {
-                $row = array();
-                foreach ($item as $key => $value) {
-                    $row[$key] = $this->_extractDynamoValue($value);
-                }
-                $rows[] = $row;
-            }
-            
-            return $rows;
             
         } catch (Exception $e) {
-            $this->e->debug('DynamoDB _selectQuery Error: ' . $e->getMessage());
-            return array();
+            $this->e->error('DynamoDB query failed: ' . $e->getMessage());
+            $result = false;
         }
+        
+        $this->_timerEnd();
+        return $result;
     }
 
     /**
-     * Override _insertQuery to handle DynamoDB-specific insert operations
+     * DynamoDB Insert Operation
      */
-    function _insertQuery() {
+    private function _dynamoInsertQuery() {
         
+        $table = $this->table_prefix . $this->_sqlParams['table'];
         $params = $this->_fetchSqlParams('set_values');
-        $tableName = $this->tablePrefix . $this->_sqlParams['table'];
         
-        if (!$params || empty($params)) {
+        if (empty($params)) {
             return false;
         }
         
-        $item = array();
+        $item = [];
         foreach ($params as $param) {
-            $item[$param['name']] = $this->_formatDynamoValue($param['value']);
+            $item[$param['name']] = $this->_convertToDynamoType($param['value']);
         }
         
-        try {
-            $this->dynamoDbClient->putItem([
-                'TableName' => $tableName,
-                'Item' => $item
-            ]);
-            return true;
-        } catch (Exception $e) {
-            $this->e->debug('DynamoDB _insertQuery Error: ' . $e->getMessage());
-            return false;
-        }
+        $response = $this->dynamodb_client->putItem([
+            'TableName' => $table,
+            'Item' => $item
+        ]);
+        
+        $this->rows_affected = 1;
+        return true;
     }
 
     /**
-     * Override _updateQuery to handle DynamoDB-specific update operations
+     * DynamoDB Select Operation
      */
-    function _updateQuery() {
+    private function _dynamoSelectQuery() {
         
+        // Get table name from FROM clause or table parameter
+        $table_name = '';
+        $fromParams = $this->_fetchSqlParams('from');
+        if (!empty($fromParams)) {
+            // Get first table from FROM clause
+            $firstTable = reset($fromParams);
+            $table_name = $firstTable['name'];
+        } else {
+            // Fallback to table parameter
+            $table_name = $this->_sqlParams['table'] ?? '';
+        }
+        
+        if (empty($table_name)) {
+            return false;
+        }
+        
+        $table = $this->table_prefix . $table_name;
+        
+        // Handle simple case first - table scan with conditions
+        $scanParams = [
+            'TableName' => $table
+        ];
+        
+        // Add filter conditions from WHERE clause
+        $whereParams = $this->_fetchSqlParams('where');
+        if (!empty($whereParams)) {
+            $filterExpression = [];
+            $expressionValues = [];
+            
+            foreach ($whereParams as $condition) {
+                $placeholder = ':' . $condition['name'];
+                $filterExpression[] = $condition['name'] . ' = ' . $placeholder;
+                $expressionValues[$placeholder] = $this->_convertToDynamoType($condition['value']);
+            }
+            
+            if (!empty($filterExpression)) {
+                $scanParams['FilterExpression'] = implode(' AND ', $filterExpression);
+                $scanParams['ExpressionAttributeValues'] = $expressionValues;
+            }
+        }
+        
+        // Add limit
+        $limit = $this->_fetchSqlParams('limit');
+        if ($limit) {
+            $scanParams['Limit'] = (int)$limit[0]['limit'];
+        }
+        
+        $response = $this->dynamodb_client->scan($scanParams);
+        
+        $this->result = [];
+        if (isset($response['Items'])) {
+            foreach ($response['Items'] as $item) {
+                $row = [];
+                foreach ($item as $key => $value) {
+                    $row[$key] = $this->_convertFromDynamoType($value);
+                }
+                $this->result[] = $row;
+            }
+        }
+        
+        $this->num_rows = count($this->result);
+        return true;
+    }
+
+    /**
+     * DynamoDB Update Operation
+     */
+    private function _dynamoUpdateQuery() {
+        
+        $table = $this->table_prefix . $this->_sqlParams['table'];
         $setParams = $this->_fetchSqlParams('set_values');
         $whereParams = $this->_fetchSqlParams('where');
-        $tableName = $this->tablePrefix . $this->_sqlParams['table'];
         
-        if (!$setParams || !$whereParams) {
+        if (empty($setParams) || empty($whereParams)) {
             return false;
         }
         
-        // Get the key for the update (from WHERE clause)
-        $whereCondition = reset($whereParams);
-        $keyName = $whereCondition['name'];
-        $keyValue = $whereCondition['value'];
+        // Build key from WHERE conditions (assuming primary key is in WHERE)
+        $key = [];
+        foreach ($whereParams as $condition) {
+            $key[$condition['name']] = $this->_convertToDynamoType($condition['value']);
+        }
         
         // Build update expression
         $updateExpression = 'SET ';
-        $expressionAttributeNames = array();
-        $expressionAttributeValues = array();
-        $setItems = array();
+        $expressionValues = [];
+        $updates = [];
         
         foreach ($setParams as $i => $param) {
-            $attrName = $param['name'];
-            $attrValue = $param['value'];
-            
-            $namePlaceholder = '#attr' . $i;
-            $valuePlaceholder = ':val' . $i;
-            
-            $setItems[] = "$namePlaceholder = $valuePlaceholder";
-            $expressionAttributeNames[$namePlaceholder] = $attrName;
-            $expressionAttributeValues[$valuePlaceholder] = $this->_formatDynamoValue($attrValue);
+            $placeholder = ':val' . $i;
+            $updates[] = $param['name'] . ' = ' . $placeholder;
+            $expressionValues[$placeholder] = $this->_convertToDynamoType($param['value']);
         }
         
-        $updateExpression .= implode(', ', $setItems);
+        $updateExpression .= implode(', ', $updates);
         
-        try {
-            $this->dynamoDbClient->updateItem([
-                'TableName' => $tableName,
-                'Key' => [
-                    $keyName => $this->_formatDynamoValue($keyValue)
-                ],
-                'UpdateExpression' => $updateExpression,
-                'ExpressionAttributeNames' => $expressionAttributeNames,
-                'ExpressionAttributeValues' => $expressionAttributeValues
-            ]);
-            return true;
-        } catch (Exception $e) {
-            $this->e->debug('DynamoDB _updateQuery Error: ' . $e->getMessage());
-            return false;
-        }
+        $this->dynamodb_client->updateItem([
+            'TableName' => $table,
+            'Key' => $key,
+            'UpdateExpression' => $updateExpression,
+            'ExpressionAttributeValues' => $expressionValues
+        ]);
+        
+        $this->rows_affected = 1;
+        return true;
     }
 
     /**
-     * Override _deleteQuery to handle DynamoDB-specific delete operations
+     * DynamoDB Delete Operation
      */
-    function _deleteQuery() {
+    private function _dynamoDeleteQuery() {
         
+        $table = $this->table_prefix . $this->_sqlParams['table'];
         $whereParams = $this->_fetchSqlParams('where');
-        $tableName = $this->tablePrefix . $this->_sqlParams['table'];
         
-        if (!$whereParams) {
+        if (empty($whereParams)) {
             return false;
         }
         
-        $whereCondition = reset($whereParams);
-        $keyName = $whereCondition['name'];
-        $keyValue = $whereCondition['value'];
+        // Build key from WHERE conditions
+        $key = [];
+        foreach ($whereParams as $condition) {
+            $key[$condition['name']] = $this->_convertToDynamoType($condition['value']);
+        }
+        
+        $this->dynamodb_client->deleteItem([
+            'TableName' => $table,
+            'Key' => $key
+        ]);
+        
+        $this->rows_affected = 1;
+        return true;
+    }
+
+    /**
+     * Create DynamoDB table
+     */
+    function createTable($entity) {
+        
+        $tableName = $this->table_prefix . $entity->getTableName();
+        
+        // Check if table exists
+        try {
+            $this->dynamodb_client->describeTable(['TableName' => $tableName]);
+            // Table exists
+            return true;
+        } catch (\Aws\DynamoDb\Exception\ResourceNotFoundException $e) {
+            // Table doesn't exist, create it
+        }
+        
+        // Get primary key from entity
+        $primaryKey = $entity->getPrimaryKey();
+        if (empty($primaryKey)) {
+            $primaryKey = 'id'; // default
+        }
+        
+        $keySchema = [
+            [
+                'AttributeName' => $primaryKey,
+                'KeyType' => 'HASH'
+            ]
+        ];
+        
+        $attributeDefinitions = [
+            [
+                'AttributeName' => $primaryKey,
+                'AttributeType' => 'S' // String by default
+            ]
+        ];
+        
+        $params = [
+            'TableName' => $tableName,
+            'KeySchema' => $keySchema,
+            'AttributeDefinitions' => $attributeDefinitions,
+            'BillingMode' => 'PAY_PER_REQUEST' // On-demand billing
+        ];
         
         try {
-            $this->dynamoDbClient->deleteItem([
+            $this->dynamodb_client->createTable($params);
+            
+            // Wait for table to be active
+            $this->dynamodb_client->waitUntil('TableExists', [
                 'TableName' => $tableName,
-                'Key' => [
-                    $keyName => $this->_formatDynamoValue($keyValue)
+                '@waiter' => [
+                    'delay' => 5,
+                    'maxAttempts' => 20
                 ]
             ]);
+            
             return true;
+            
         } catch (Exception $e) {
-            $this->e->debug('DynamoDB _deleteQuery Error: ' . $e->getMessage());
+            $this->e->error('Failed to create DynamoDB table: ' . $e->getMessage());
             return false;
         }
     }
 
     /**
-     * Format a value for DynamoDB storage
+     * Check if table exists
      */
-    private function _formatDynamoValue($value) {
+    function tableExists($tableName) {
+        try {
+            $this->dynamodb_client->describeTable([
+                'TableName' => $this->table_prefix . $tableName
+            ]);
+            return true;
+        } catch (\Aws\DynamoDb\Exception\ResourceNotFoundException $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Convert PHP value to DynamoDB attribute value
+     */
+    private function _convertToDynamoType($value) {
         if (is_numeric($value)) {
             return ['N' => (string)$value];
         } elseif (is_bool($value)) {
@@ -708,143 +501,120 @@ class owa_db_dynamodb extends owa_db {
     }
 
     /**
-     * Extract actual value from DynamoDB format
+     * Convert DynamoDB attribute value to PHP value
      */
-    private function _extractDynamoValue($dynamoValue) {
+    private function _convertFromDynamoType($dynamoValue) {
         if (isset($dynamoValue['S'])) {
             return $dynamoValue['S'];
         } elseif (isset($dynamoValue['N'])) {
-            return is_numeric($dynamoValue['N']) ? (float)$dynamoValue['N'] : $dynamoValue['N'];
+            return is_float($dynamoValue['N']) ? (float)$dynamoValue['N'] : (int)$dynamoValue['N'];
         } elseif (isset($dynamoValue['BOOL'])) {
             return $dynamoValue['BOOL'];
         } elseif (isset($dynamoValue['NULL'])) {
             return null;
         } else {
-            return $dynamoValue;
+            return $dynamoValue; // fallback
         }
     }
 
     /**
-     * Check if a column is a primary key for a table
-     * Simple heuristic - assumes 'id' is usually the primary key
+     * Override methods that don't apply to DynamoDB
      */
-    private function _isPrimaryKey($tableName, $columnName) {
-        return ($columnName === 'id');
+    function beginTransaction() {
+        // DynamoDB doesn't have traditional transactions
+        // Could implement with transaction API in future
+        return true;
     }
 
+    function endTransaction() {
+        return true;
+    }
+
+    /**
+     * Prepare string for DynamoDB (less sanitization needed)
+     */
+    function prepare($value) {
+        if (is_string($value)) {
+            return trim($value);
+        }
+        return $value;
+    }
+
+    /**
+     * Get all rows from result
+     */
+    function getAllRows() {
+        return $this->result;
+    }
+
+    /**
+     * Get single row from result
+     */
+    function getOneRow() {
+        if (!empty($this->result)) {
+            return $this->result[0];
+        }
+        return false;
+    }
+
+    /**
+     * Get affected rows count
+     */
     function getAffectedRows() {
-        // DynamoDB operations don't return affected rows in the same way
-        return 1;
+        return $this->rows_affected;
     }
 
     /**
-     * Override createTable to handle DynamoDB table creation
+     * Execute raw query (limited DynamoDB support)
      */
-    function createTable($entity) {
-        
-        $tableName = $this->tablePrefix . $entity->getTableName();
-        
-        try {
-            // Check if table already exists
-            $this->dynamoDbClient->describeTable(['TableName' => $tableName]);
-            return true; // Table already exists
-        } catch (\Aws\DynamoDb\Exception\ResourceNotFoundException $e) {
-            // Table doesn't exist, create it
-            
-            $all_cols = $entity->getColumns();
-            $keySchema = array();
-            $attributeDefinitions = array();
-            
-            // Find primary key and set up key schema
-            foreach ($all_cols as $colName) {
-                $colDef = $entity->getProperty($colName);
-                if ($colDef && $colDef->isPrimaryKey()) {
-                    $keySchema[] = [
-                        'AttributeName' => $colName,
-                        'KeyType' => 'HASH'
-                    ];
-                    
-                    // Determine attribute type based on data type
-                    $dataType = $colDef->getDataType();
-                    $attributeType = 'S'; // Default to string
-                    if (in_array($dataType, ['OWA_DTD_BIGINT', 'OWA_DTD_INT', 'OWA_DTD_TINYINT'])) {
-                        $attributeType = 'N';
-                    }
-                    
-                    $attributeDefinitions[] = [
-                        'AttributeName' => $colName,
-                        'AttributeType' => $attributeType
-                    ];
-                    break; // DynamoDB only supports one hash key
-                }
-            }
-            
-            // If no primary key found, use 'id' as default
-            if (empty($keySchema)) {
-                $keySchema[] = [
-                    'AttributeName' => 'id',
-                    'KeyType' => 'HASH'
-                ];
-                $attributeDefinitions[] = [
-                    'AttributeName' => 'id',
-                    'AttributeType' => 'S'
-                ];
-            }
-            
-            $params = [
-                'TableName' => $tableName,
-                'KeySchema' => $keySchema,
-                'AttributeDefinitions' => $attributeDefinitions,
-                'BillingMode' => 'PAY_PER_REQUEST'
-            ];
-
-            $result = $this->dynamoDbClient->createTable($params);
-            
-            // Wait for table to be created
-            $this->dynamoDbClient->waitUntil('TableExists', ['TableName' => $tableName]);
-            
-            return true;
-        } catch (Exception $e) {
-            $this->e->alert('DynamoDB createTable error: ' . $e->getMessage());
-            return false;
-        }
+    function query($operation) {
+        // For DynamoDB, this would be for direct AWS SDK calls
+        // Limited implementation for compatibility
+        $this->e->debug("Direct query execution not supported in DynamoDB: $operation");
+        return false;
     }
 
     /**
-     * Override dropTable to handle DynamoDB table deletion
+     * Get number of rows in result
      */
-    function dropTable($table_name) {
-        
-        $tableName = $this->tablePrefix . $table_name;
-        
-        try {
-            $this->dynamoDbClient->deleteTable(['TableName' => $tableName]);
-            return true;
-        } catch (\Aws\DynamoDb\Exception\ResourceNotFoundException $e) {
-            return true; // Table doesn't exist, consider it successful
-        } catch (Exception $e) {
-            $this->e->alert('DynamoDB dropTable error: ' . $e->getMessage());
-            return false;
-        }
+    function getNumRows() {
+        return $this->num_rows;
     }
 
     /**
-     * Check if a table exists in DynamoDB
+     * DynamoDB doesn't support traditional LIMIT/OFFSET pagination
+     * This provides basic limit support using DynamoDB Limit parameter
      */
-    function tableExists($table_name) {
-        
-        $tableName = $this->tablePrefix . $table_name;
-        
-        try {
-            $this->dynamoDbClient->describeTable(['TableName' => $tableName]);
-            return true;
-        } catch (\Aws\DynamoDb\Exception\ResourceNotFoundException $e) {
-            return false;
-        } catch (Exception $e) {
-            $this->e->debug('DynamoDB tableExists error: ' . $e->getMessage());
-            return false;
-        }
+    function limit($limit) {
+        $this->_sqlParams['limit'][] = array('limit' => $limit);
+        return $this;
+    }
+
+    /**
+     * Order by is not directly supported in DynamoDB scans
+     * This is a no-op for compatibility but logs a warning
+     */
+    function orderBy($col, $direction = 'ASC') {
+        $this->e->debug("ORDER BY not supported in DynamoDB scans. Results are not guaranteed to be ordered by $col $direction");
+        return $this;
+    }
+
+    /**
+     * Group by is not supported in DynamoDB
+     * This is a no-op for compatibility but logs a warning  
+     */
+    function groupBy($col) {
+        $this->e->debug("GROUP BY not supported in DynamoDB. Grouping by $col will be ignored.");
+        return $this;
+    }
+
+    /**
+     * Having clauses are not supported in DynamoDB
+     * This is a no-op for compatibility but logs a warning
+     */
+    function having($name, $value, $operator = '=') {
+        $this->e->debug("HAVING clauses not supported in DynamoDB. Having $name $operator $value will be ignored.");
+        return $this;
     }
 }
-
 ?>
